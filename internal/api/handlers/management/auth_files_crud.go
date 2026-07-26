@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher/synthesizer"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -264,6 +265,18 @@ func (h *Handler) writeAuthFile(ctx context.Context, name string, data []byte) e
 		if abs, errAbs := filepath.Abs(dst); errAbs == nil {
 			dst = abs
 		}
+	}
+	// A Codex CLI auth.json or account-export payload must be flattened into the
+	// codex credential document before it lands on disk. Otherwise the watcher
+	// classifies it as an "unknown" provider and the management UI cannot surface
+	// the ChatGPT plan details or the quota-refresh action. Non-codex uploads and
+	// already-flattened codex files pass through untouched.
+	if codex.LooksLikeCodexAuthFile(data) {
+		normalized, _, errNormalize := codex.NormalizeAuthFileJSON(data)
+		if errNormalize != nil {
+			return fmt.Errorf("invalid codex auth file: %w", errNormalize)
+		}
+		data = normalized
 	}
 	auth, err := h.buildAuthFromFileData(dst, data)
 	if err != nil {

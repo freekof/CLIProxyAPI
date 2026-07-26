@@ -90,6 +90,129 @@ func ParseAuthFile(data []byte) (*AuthFileImport, error) {
 	return parseAuthFileAt(data, time.Now())
 }
 
+// codexAuthFileMarkers are keys whose presence signals a Codex/ChatGPT OAuth
+// credential regardless of whether the payload is a native CLI auth.json or an
+// account-export document.
+var codexAuthFileMarkers = []string{
+	"chatgpt_account_id", "chatgptAccountId",
+	"chatgpt_user_id", "chatgptUserId",
+	"auth_mode", "authMode",
+	"OPENAI_API_KEY",
+}
+
+// LooksLikeCodexAuthFile reports whether a raw JSON payload is a Codex CLI
+// auth.json or an account-export document carrying Codex credentials, and is not
+// already a flattened codex auth file (type == "codex").
+//
+// It is deliberately conservative: it returns false for anything that already
+// declares a provider type or that shows no Codex-specific markers, so uploads
+// for other providers are never rewritten.
+func LooksLikeCodexAuthFile(data []byte) bool {
+	var root map[string]any
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&root); err != nil || len(root) == 0 {
+		return false
+	}
+
+	// Already a flattened auth file: let the normal load path handle it. A codex
+	// type is served as-is; any other declared type belongs to another provider.
+	if declared, ok := root["type"].(string); ok && strings.TrimSpace(declared) != "" {
+		return false
+	}
+
+	candidate := root
+	if accounts, ok := root["accounts"].([]any); ok {
+		account, found := firstAuthFileObject(accounts)
+		if !found {
+			return false
+		}
+		candidate = account
+		if creds, okCreds := account["credentials"].(map[string]any); okCreds {
+			candidate = creds
+		}
+	}
+
+	// A nested tokens object is the strongest native-CLI signal.
+	if _, ok := candidate["tokens"].(map[string]any); ok {
+		return true
+	}
+	for _, marker := range codexAuthFileMarkers {
+		if _, ok := candidate[marker]; ok {
+			return true
+		}
+	}
+	// An access_token alongside a ChatGPT-style id_token also qualifies.
+	if _, ok := candidate["access_token"]; ok {
+		if _, okID := candidate["id_token"]; okID {
+			return true
+		}
+	}
+	return false
+}
+
+// NormalizeAuthFileJSON converts a Codex CLI auth.json or account-export payload
+// into the flattened credential document served by the codex provider, returning
+// the marshalled JSON. It is the shared normalisation used by both the CLI import
+// command and the management upload path, so a credential imported either way is
+// byte-compatible with one produced by the OAuth login flow.
+//
+// The returned document preserves the identity and routing fields the source
+// carried (client_id, chatgpt_user_id, organization_id, token_type,
+// model_mapping) so the credential behaves identically to a native login.
+func NormalizeAuthFileJSON(data []byte) ([]byte, *AuthFileImport, error) {
+	imported, err := ParseAuthFile(data)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	doc := imported.Storage.toDocument()
+
+	// Carry across optional fields that ParseAuthFile does not model but that a
+	// native codex file and the executor benefit from.
+	if raw := extractSourceCredentials(data); raw != nil {
+		for _, key := range []string{"client_id", "chatgpt_user_id", "organization_id", "token_type", "model_mapping"} {
+			if _, present := doc[key]; present {
+				continue
+			}
+			if value, ok := raw[key]; ok && value != nil {
+				doc[key] = value
+			}
+		}
+	}
+	if imported.PlanType != "" {
+		doc["plan_type"] = imported.PlanType
+	}
+
+	out, errMarshal := json.MarshalIndent(doc, "", "  ")
+	if errMarshal != nil {
+		return nil, nil, fmt.Errorf("codex auth file: marshal normalised document: %w", errMarshal)
+	}
+	return out, imported, nil
+}
+
+// extractSourceCredentials returns the credentials object from either the flat
+// root or accounts[0].credentials, for carrying across optional passthrough
+// fields. It returns nil when no object can be located.
+func extractSourceCredentials(data []byte) map[string]any {
+	var root map[string]any
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&root); err != nil {
+		return nil
+	}
+	if accounts, ok := root["accounts"].([]any); ok {
+		if account, found := firstAuthFileObject(accounts); found {
+			if creds, okCreds := account["credentials"].(map[string]any); okCreds {
+				return creds
+			}
+			return account
+		}
+		return nil
+	}
+	return root
+}
+
 // parseAuthFileAt is the clock-injectable core of ParseAuthFile.
 func parseAuthFileAt(data []byte, now time.Time) (*AuthFileImport, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
@@ -105,6 +228,15 @@ func parseAuthFileAt(data []byte, now time.Time) (*AuthFileImport, error) {
 	}
 	if len(root) == 0 {
 		return nil, ErrAuthFileEmpty
+	}
+
+	// Accept both the native Codex CLI auth.json layout and the account-export
+	// layout written by sub2api-style gateways ({"accounts":[{"credentials":...}]}).
+	// unwrapAuthFileRoot flattens the latter onto a single working object so the
+	// path-based extraction below stays layout-agnostic.
+	root, err := unwrapAuthFileRoot(root)
+	if err != nil {
+		return nil, err
 	}
 
 	result := &AuthFileImport{Storage: &CodexTokenStorage{Type: "codex"}}

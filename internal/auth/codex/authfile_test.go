@@ -444,6 +444,128 @@ func TestParseAuthFileAccountExportUnsupportedMode(t *testing.T) {
 	}
 }
 
+func TestLooksLikeCodexAuthFile(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	accessToken := makeTestJWT(t, now.Add(time.Hour), "e@x.com", "acct", "plus")
+	idToken := makeTestJWT(t, now.Add(time.Hour), "e@x.com", "acct", "plus")
+
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{name: "native tokens object", data: `{"auth_mode":"chatgpt","tokens":{"access_token":"x"}}`, want: true},
+		{name: "account export", data: string(accountExportJSON(t, accessToken, "rt", idToken, "acct", "e@x.com", "team")), want: true},
+		{name: "access plus id token", data: `{"access_token":"a","id_token":"b"}`, want: true},
+		{name: "chatgpt account marker", data: `{"access_token":"a","chatgpt_account_id":"acct"}`, want: true},
+		{name: "api key only", data: `{"OPENAI_API_KEY":"sk"}`, want: true},
+		{name: "already flat codex", data: `{"type":"codex","access_token":"a"}`, want: false},
+		{name: "other provider", data: `{"type":"gemini","access_token":"a"}`, want: false},
+		{name: "vertex service account", data: `{"project_id":"p","client_email":"e","private_key":"k"}`, want: false},
+		{name: "garbage", data: `not json`, want: false},
+		{name: "empty object", data: `{}`, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := LooksLikeCodexAuthFile([]byte(tc.data)); got != tc.want {
+				t.Fatalf("LooksLikeCodexAuthFile() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeAuthFileJSON(t *testing.T) {
+	now := time.Now()
+	expiry := now.Add(4 * time.Hour)
+	accessToken := makeTestJWT(t, expiry, "norm@example.com", "acct-norm", "team")
+	idToken := makeTestJWT(t, expiry, "norm@example.com", "acct-norm", "team")
+
+	// Account-export shape carrying passthrough fields the parser does not model.
+	doc := map[string]any{
+		"accounts": []any{
+			map[string]any{
+				"plan_type": "team",
+				"credentials": map[string]any{
+					"access_token":       accessToken,
+					"refresh_token":      "rt-norm",
+					"id_token":           idToken,
+					"chatgpt_account_id": "acct-norm",
+					"chatgpt_user_id":    "user-norm",
+					"client_id":          "app_client_norm",
+					"organization_id":    "org-norm",
+					"token_type":         "Bearer",
+					"email":              "norm@example.com",
+					"expires_at":         0,
+					"model_mapping":      map[string]any{"gpt-5.5": "gpt-5.5"},
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	out, imported, err := NormalizeAuthFileJSON(raw)
+	if err != nil {
+		t.Fatalf("NormalizeAuthFileJSON() error: %v", err)
+	}
+
+	var flat map[string]any
+	if err := json.Unmarshal(out, &flat); err != nil {
+		t.Fatalf("normalised output is not valid JSON: %v", err)
+	}
+
+	// Fields the button and executor depend on must be present at the top level.
+	if flat["type"] != "codex" {
+		t.Errorf("type = %v, want codex", flat["type"])
+	}
+	if flat["id_token"] != idToken {
+		t.Error("id_token missing from flat document (button would not render)")
+	}
+	if flat["access_token"] != accessToken {
+		t.Error("access_token missing from flat document")
+	}
+	if flat["refresh_token"] != "rt-norm" {
+		t.Errorf("refresh_token = %v, want rt-norm", flat["refresh_token"])
+	}
+	if flat["account_id"] != "acct-norm" {
+		t.Errorf("account_id = %v, want acct-norm", flat["account_id"])
+	}
+	// Passthrough fields carried across from the source.
+	if flat["client_id"] != "app_client_norm" {
+		t.Errorf("client_id = %v, want app_client_norm", flat["client_id"])
+	}
+	if flat["organization_id"] != "org-norm" {
+		t.Errorf("organization_id = %v, want org-norm", flat["organization_id"])
+	}
+	if flat["token_type"] != "Bearer" {
+		t.Errorf("token_type = %v, want Bearer", flat["token_type"])
+	}
+	if _, ok := flat["model_mapping"]; !ok {
+		t.Error("model_mapping should be carried across")
+	}
+	// The placeholder expires_at of 0 must not survive as a real expiry; the
+	// flat document records the JWT-derived expiry under "expired".
+	if _, ok := flat["expires_at"]; ok {
+		t.Error("placeholder expires_at must not be carried into the flat document")
+	}
+	if strings.TrimSpace(imported.Storage.Expire) == "" {
+		t.Error("expected a resolved expiry from the JWT claim")
+	}
+}
+
+func TestNormalizeAuthFileJSONRejectsExpired(t *testing.T) {
+	now := time.Now()
+	accessToken := makeTestJWT(t, now.Add(-2*time.Hour), "e@x.com", "acct", "plus")
+	data := codexAuthFileJSON(t, AuthModeChatGPT, accessToken, "rt", "", "acct", "")
+
+	if _, _, err := NormalizeAuthFileJSON(data); !errors.Is(err, ErrAuthFileExpired) {
+		t.Fatalf("NormalizeAuthFileJSON() error = %v, want ErrAuthFileExpired", err)
+	}
+}
+
 func TestHashAccountID(t *testing.T) {
 	if got := HashAccountID(""); got != "" {
 		t.Errorf("HashAccountID(\"\") = %q, want empty", got)

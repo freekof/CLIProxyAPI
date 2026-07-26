@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
 )
@@ -41,6 +42,29 @@ type CodexTokenStorage struct {
 // SetMetadata allows external callers to inject metadata into the storage before saving.
 func (ts *CodexTokenStorage) SetMetadata(meta map[string]any) {
 	ts.Metadata = meta
+}
+
+// toDocument renders the storage as the flat JSON object persisted on disk,
+// omitting empty optional fields. It is used when normalising an imported
+// credential so the output matches what SaveTokenToFile would write.
+func (ts *CodexTokenStorage) toDocument() map[string]any {
+	doc := map[string]any{
+		"access_token": ts.AccessToken,
+		"type":         "codex",
+	}
+	for key, value := range map[string]string{
+		"id_token":      ts.IDToken,
+		"refresh_token": ts.RefreshToken,
+		"account_id":    ts.AccountID,
+		"last_refresh":  ts.LastRefresh,
+		"email":         ts.Email,
+		"expired":       ts.Expire,
+	} {
+		if strings.TrimSpace(value) != "" {
+			doc[key] = value
+		}
+	}
+	return doc
 }
 
 // SaveTokenToFile serializes the Codex token storage to a JSON file.
