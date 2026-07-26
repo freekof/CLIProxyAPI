@@ -1,0 +1,148 @@
+name: build-windows-amd64
+
+# 手动触发：Actions 页面选择本工作流 -> Run workflow
+# 可在下拉框里选分支/tag，产物为 windows/amd64（Windows 10 及以上 64 位）
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '打进二进制的版本号，留空则自动用 dev-<短 SHA>'
+        required: false
+        type: string
+        default: ''
+      refresh_model_catalog:
+        description: '构建前从 router-for-me/models 拉取最新模型目录'
+        required: false
+        type: boolean
+        default: true
+      cgo:
+        description: '启用 CGO（与正式 release 一致，插件功能需要）'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.26.4'
+  GOOS: windows
+  GOARCH: amd64
+
+jobs:
+  build:
+    name: Build windows/amd64
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # 需要完整历史才能取到 short SHA 和 tag 描述
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Cache Go build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-${{ runner.os }}-windows-amd64-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-windows-amd64-
+
+      - name: Refresh models catalog
+        if: ${{ inputs.refresh_model_catalog }}
+        shell: bash
+        run: bash .github/scripts/refresh-model-catalogs.sh
+
+      - name: Generate build metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          commit="$(git rev-parse --short HEAD)"
+
+          version="${{ inputs.version }}"
+          if [[ -z "$version" ]]; then
+            # 手动构建通常不在 tag 上，回退到 dev-<短 SHA>
+            version="dev-${commit}"
+          fi
+          # 容忍用户输入带 v 前缀的版本号
+          version="${version#v}"
+
+          {
+            echo "RELEASE_VERSION=${version}"
+            echo "COMMIT=${commit}"
+            echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_ENV"
+
+          echo "archive_name=CLIProxyAPI_${version}_windows_amd64" >> "$GITHUB_OUTPUT"
+          printf 'building version=%s commit=%s\n' "$version" "$commit"
+
+      - name: Build
+        shell: bash
+        env:
+          CGO_ENABLED: ${{ inputs.cgo && '1' || '0' }}
+        run: |
+          set -euo pipefail
+
+          archive_dir="dist/archive"
+          rm -rf dist
+          mkdir -p "$archive_dir"
+
+          go build \
+            -trimpath \
+            -ldflags="-s -w -X main.Version=${RELEASE_VERSION} -X main.Commit=${COMMIT} -X main.BuildDate=${BUILD_DATE}" \
+            -o "$archive_dir/cli-proxy-api.exe" \
+            ./cmd/server/
+
+          cp LICENSE README.md README_CN.md config.example.yaml "$archive_dir/"
+
+      - name: Verify binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          exe="dist/archive/cli-proxy-api.exe"
+          test -s "$exe"
+
+          # 启动横幅里带 ldflags 注入的版本信息；--help 会以退出码 2 结束，
+          # 所以这里只取输出做断言，不看退出码。
+          banner="$("$exe" --help 2>&1 | head -n 1 || true)"
+          printf '%s\n' "$banner"
+
+          if ! grep -q "${RELEASE_VERSION}" <<< "$banner"; then
+            printf '::error::版本注入失败，横幅中未找到 %s\n' "${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+          if ! grep -q "${COMMIT}" <<< "$banner"; then
+            printf '::error::commit 注入失败，横幅中未找到 %s\n' "${COMMIT}" >&2
+            exit 1
+          fi
+
+      - name: Package zip
+        shell: bash
+        env:
+          ARCHIVE_NAME: ${{ steps.meta.outputs.archive_name }}
+        run: |
+          set -euo pipefail
+          powershell -NoProfile -Command \
+            "Compress-Archive -Path 'dist/archive/*' -DestinationPath 'dist/${ARCHIVE_NAME}.zip' -Force"
+          ls -la dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.archive_name }}
+          path: dist/CLIProxyAPI_*.zip
+          if-no-files-found: error
+          retention-days: 30
