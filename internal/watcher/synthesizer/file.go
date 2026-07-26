@@ -71,6 +71,16 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 	}
 	now := ctx.Now
 	cfg := ctx.Config
+	// A Codex CLI auth.json or account-export payload (e.g. from sub2api) is not
+	// yet in the flat codex document shape. Normalise it in-memory so it is
+	// recognised as the codex provider, plan_type is derived, and the management
+	// UI can surface plan details and the quota-refresh action. This covers files
+	// placed in the auth directory by any means, not only the upload API.
+	if codex.LooksLikeCodexAuthFile(data) {
+		if normalized, _, errNormalize := codex.NormalizeAuthFileJSON(data); errNormalize == nil {
+			data = normalized
+		}
+	}
 	var metadata map[string]any
 	if errUnmarshal := json.Unmarshal(data, &metadata); errUnmarshal != nil {
 		return nil
