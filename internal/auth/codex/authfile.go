@@ -50,6 +50,9 @@ var (
 	// ErrAuthFileNotRenewable indicates the credential carries neither a refresh
 	// token nor a determinable expiry, so its validity cannot be established.
 	ErrAuthFileNotRenewable = errors.New("codex auth file: credential cannot be renewed or validated")
+	// ErrAuthFileNoAccount indicates an account-export payload contained no
+	// usable account entry.
+	ErrAuthFileNoAccount = errors.New("codex auth file: no account entry found")
 )
 
 // AuthFileImport is the normalised result of parsing a Codex auth.json payload.
@@ -197,6 +200,104 @@ func parseAuthFileAt(data []byte, now time.Time) (*AuthFileImport, error) {
 	}
 
 	return result, nil
+}
+
+// unwrapAuthFileRoot normalises the two supported payload layouts onto a single
+// working object.
+//
+// The native Codex CLI writes its fields at the top level (optionally nested
+// under "tokens"), which is returned unchanged. Account-export gateways instead
+// wrap one or more accounts under an "accounts" array, each carrying its OAuth
+// material inside a "credentials" object and its plan/email at the account
+// level. For that shape the first account is selected and its credentials are
+// merged with the surviving account-level fields so the downstream path lookups
+// resolve regardless of origin.
+//
+// Only the first account is imported: each credential lands in its own auth
+// file, so multi-account exports are handled by importing the file per account
+// rather than fanning out here.
+func unwrapAuthFileRoot(root map[string]any) (map[string]any, error) {
+	rawAccounts, ok := root["accounts"]
+	if !ok {
+		return root, nil
+	}
+
+	accounts, ok := rawAccounts.([]any)
+	if !ok || len(accounts) == 0 {
+		return nil, ErrAuthFileNoAccount
+	}
+
+	account, ok := firstAuthFileObject(accounts)
+	if !ok {
+		return nil, ErrAuthFileNoAccount
+	}
+
+	credentials, ok := account["credentials"].(map[string]any)
+	if !ok {
+		// Some exports flatten credentials onto the account object itself.
+		credentials = account
+	}
+
+	// Start from the credentials object and layer on account-level fields that
+	// the credentials block does not already provide (email, plan_type, name).
+	merged := make(map[string]any, len(credentials)+4)
+	for key, value := range credentials {
+		merged[key] = value
+	}
+	for _, key := range []string{"email", "plan_type", "planType", "name", "auth_mode", "authMode"} {
+		if _, exists := merged[key]; exists {
+			continue
+		}
+		if value, present := account[key]; present {
+			merged[key] = value
+		}
+	}
+
+	// A placeholder expires_at of 0 (or an empty string) must not be treated as
+	// a real expiry; drop it so the parser falls back to the token claims.
+	if isZeroAuthFileExpiry(merged["expires_at"]) {
+		delete(merged, "expires_at")
+	}
+	if isZeroAuthFileExpiry(merged["expiresAt"]) {
+		delete(merged, "expiresAt")
+	}
+
+	return merged, nil
+}
+
+// firstAuthFileObject returns the first element of the slice that is a JSON
+// object.
+func firstAuthFileObject(values []any) (map[string]any, bool) {
+	for _, value := range values {
+		if obj, ok := value.(map[string]any); ok && len(obj) > 0 {
+			return obj, true
+		}
+	}
+	return nil, false
+}
+
+// isZeroAuthFileExpiry reports whether an expiry value is a placeholder that
+// should be ignored (numeric zero, or an empty/zero string).
+func isZeroAuthFileExpiry(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case json.Number:
+		if n, err := typed.Int64(); err == nil {
+			return n <= 0
+		}
+		if f, err := typed.Float64(); err == nil {
+			return f <= 0
+		}
+	case float64:
+		return typed <= 0
+	case int:
+		return typed <= 0
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		return trimmed == "" || trimmed == "0"
+	}
+	return false
 }
 
 // checkAuthFileMode rejects auth.json payloads whose recorded authentication

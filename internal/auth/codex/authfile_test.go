@@ -312,6 +312,138 @@ func TestParseAuthFileNumericEpochExpiry(t *testing.T) {
 	}
 }
 
+// accountExportJSON renders the account-export layout used by sub2api-style
+// gateways: OAuth material nested under accounts[].credentials, with a
+// placeholder expires_at of 0.
+func accountExportJSON(t *testing.T, accessToken, refreshToken, idToken, accountID, email, plan string) []byte {
+	t.Helper()
+
+	doc := map[string]any{
+		"accounts": []any{
+			map[string]any{
+				"name":      "acct-name",
+				"plan_type": plan,
+				"platform":  "openai",
+				"type":      "oauth",
+				"credentials": map[string]any{
+					"access_token":       accessToken,
+					"refresh_token":      refreshToken,
+					"id_token":           idToken,
+					"chatgpt_account_id": accountID,
+					"email":              email,
+					"expires_at":         0,
+					"token_type":         "Bearer",
+				},
+			},
+		},
+		"exported_at": "2026-07-24T13:39:58Z",
+		"proxies":     []any{},
+	}
+
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal account export: %v", err)
+	}
+	return raw
+}
+
+func TestParseAuthFileAccountExportLayout(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	expiry := now.Add(6 * time.Hour)
+	accessToken := makeTestJWT(t, expiry, "export@example.com", "acct-export", "team")
+	idToken := makeTestJWT(t, expiry, "export@example.com", "acct-export", "team")
+
+	data := accountExportJSON(t, accessToken, "rt-export", idToken, "acct-export", "export@example.com", "team")
+
+	got, err := parseAuthFileAt(data, now)
+	if err != nil {
+		t.Fatalf("parseAuthFileAt() unexpected error: %v", err)
+	}
+	if got.Storage.AccessToken != accessToken {
+		t.Errorf("AccessToken not resolved from accounts[].credentials")
+	}
+	if got.Storage.RefreshToken != "rt-export" {
+		t.Errorf("RefreshToken = %q, want rt-export", got.Storage.RefreshToken)
+	}
+	if got.Storage.AccountID != "acct-export" {
+		t.Errorf("AccountID = %q, want acct-export", got.Storage.AccountID)
+	}
+	if got.Storage.Email != "export@example.com" {
+		t.Errorf("Email = %q, want export@example.com", got.Storage.Email)
+	}
+	if got.PlanType != "team" {
+		t.Errorf("PlanType = %q, want team", got.PlanType)
+	}
+	// The placeholder expires_at of 0 must be ignored in favour of the JWT claim.
+	if !got.ExpiresAt.Equal(expiry) {
+		t.Errorf("ExpiresAt = %v, want the JWT claim %v (placeholder expires_at must be ignored)", got.ExpiresAt, expiry)
+	}
+}
+
+func TestParseAuthFileAccountExportZeroExpiryNotExpired(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	// Token is valid; only the file-level expires_at is the placeholder 0.
+	expiry := now.Add(time.Hour)
+	accessToken := makeTestJWT(t, expiry, "z@example.com", "acct-z", "plus")
+
+	data := accountExportJSON(t, accessToken, "rt", "", "acct-z", "z@example.com", "plus")
+
+	got, err := parseAuthFileAt(data, now)
+	if err != nil {
+		t.Fatalf("parseAuthFileAt() rejected a valid credential because of the placeholder expiry: %v", err)
+	}
+	if !got.ExpiresAt.Equal(expiry) {
+		t.Errorf("ExpiresAt = %v, want %v", got.ExpiresAt, expiry)
+	}
+}
+
+func TestParseAuthFileEmptyAccounts(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		data string
+	}{
+		{name: "empty array", data: `{"accounts":[]}`},
+		{name: "null entry", data: `{"accounts":[null]}`},
+		{name: "non-object entry", data: `{"accounts":["nope"]}`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseAuthFileAt([]byte(tc.data), now)
+			if !errors.Is(err, ErrAuthFileNoAccount) {
+				t.Fatalf("parseAuthFileAt() error = %v, want ErrAuthFileNoAccount", err)
+			}
+		})
+	}
+}
+
+func TestParseAuthFileAccountExportUnsupportedMode(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	accessToken := makeTestJWT(t, now.Add(time.Hour), "e@x.com", "a", "plus")
+
+	// auth_mode lives at the account level in this layout; it must still be honoured.
+	doc := map[string]any{
+		"accounts": []any{
+			map[string]any{
+				"auth_mode": "apikey",
+				"credentials": map[string]any{
+					"access_token": accessToken,
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	if _, err := parseAuthFileAt(raw, now); !errors.Is(err, ErrAuthFileUnsupportedMode) {
+		t.Fatalf("parseAuthFileAt() error = %v, want ErrAuthFileUnsupportedMode", err)
+	}
+}
+
 func TestHashAccountID(t *testing.T) {
 	if got := HashAccountID(""); got != "" {
 		t.Errorf("HashAccountID(\"\") = %q, want empty", got)
