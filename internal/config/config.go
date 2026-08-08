@@ -100,6 +100,9 @@ type Config struct {
 
 	AntigravitySignatureBypassStrict *bool `yaml:"antigravity-signature-bypass-strict,omitempty" json:"antigravity-signature-bypass-strict,omitempty"`
 
+	// Antigravity configures provider-wide Antigravity request behavior.
+	Antigravity AntigravityConfig `yaml:"antigravity" json:"antigravity"`
+
 	// GeminiKey defines Gemini API key configurations with optional routing overrides.
 	GeminiKey []GeminiKey `yaml:"gemini-api-key" json:"gemini-api-key"`
 
@@ -111,6 +114,9 @@ type Config struct {
 
 	// XAIKey defines xAI API key configurations using the same structure as Codex API keys.
 	XAIKey []XAIKey `yaml:"xai-api-key" json:"xai-api-key"`
+
+	// XAI configures provider-wide xAI request behavior.
+	XAI XAIConfig `yaml:"xai" json:"xai"`
 
 	// Codex configures provider-wide Codex request behavior.
 	Codex CodexConfig `yaml:"codex" json:"codex"`

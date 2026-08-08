@@ -36,6 +36,7 @@ type geminiToResponsesState struct {
 	ResponseID string
 	CreatedAt  int64
 	Started    bool
+	Completed  bool
 
 	// message aggregation
 	MsgOpened    bool
@@ -162,12 +163,14 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 	}
 
 	rawJSON = bytes.TrimSpace(rawJSON)
-	if len(rawJSON) == 0 {
+	if len(rawJSON) == 0 || st.Completed {
 		return [][]byte{}
 	}
-	doneOnly := bytes.Equal(rawJSON, []byte("[DONE]"))
-	if doneOnly {
-		rawJSON = []byte(`{}`)
+	if bytes.Equal(rawJSON, []byte("[DONE]")) {
+		if !st.Started {
+			return [][]byte{}
+		}
+		rawJSON = []byte(`{"candidates":[{"finishReason":"STOP"}]}`)
 	}
 
 	root := gjson.ParseBytes(rawJSON)
@@ -341,13 +344,6 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 		}
 	}
 
-	if doneOnly {
-		if st.Started {
-			openReasoning()
-		}
-		return out
-	}
-
 	// Initialize per-response fields and emit created/in_progress once
 	if !st.Started {
 		st.ResponseID = root.Get("responseId").String()
@@ -370,12 +366,22 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 		created, _ = sjson.SetBytes(created, "sequence_number", nextSeq())
 		created, _ = sjson.SetBytes(created, "response.id", st.ResponseID)
 		created, _ = sjson.SetBytes(created, "response.created_at", st.CreatedAt)
+		requestModelName := translatorcommon.RequestModelName(originalRequestRawJSON, requestRawJSON)
+		if requestModelName == "" {
+			requestModelName = modelName
+		}
+		if requestModelName != "" {
+			created, _ = sjson.SetBytes(created, "response.model", requestModelName)
+		}
 		out = append(out, emitEvent("response.created", created))
 
-		inprog := []byte(`{"type":"response.in_progress","sequence_number":0,"response":{"id":"","object":"response","created_at":0,"status":"in_progress"}}`)
+		inprog := []byte(`{"type":"response.in_progress","sequence_number":0,"response":{"id":"","object":"response","created_at":0,"status":"in_progress","output":[]}}`)
 		inprog, _ = sjson.SetBytes(inprog, "sequence_number", nextSeq())
 		inprog, _ = sjson.SetBytes(inprog, "response.id", st.ResponseID)
 		inprog, _ = sjson.SetBytes(inprog, "response.created_at", st.CreatedAt)
+		if requestModelName != "" {
+			inprog, _ = sjson.SetBytes(inprog, "response.model", requestModelName)
+		}
 		out = append(out, emitEvent("response.in_progress", inprog))
 
 		st.Started = true
@@ -826,6 +832,7 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 		}
 
 		out = append(out, emitEvent("response.completed", completed))
+		st.Completed = true
 	}
 
 	return out

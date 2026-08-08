@@ -67,13 +67,13 @@ func (e *XAIExecutor) prepareResponsesRequestTo(ctx context.Context, req cliprox
 		originalPayloadSource = opts.OriginalRequest
 	}
 	originalPayload := bytes.Clone(originalPayloadSource)
-	originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, stream)
+	originalTranslated := helps.TranslateRequestWithAPIKeyModelCompatibility(ctx, opts.Headers, e.cfg, from, to, baseModel, originalPayload, stream, helps.APIKeyModelIsCompat(req))
 	originalTranslated = preserveXAIResponsesOutputControls(originalTranslated, originalPayload, from)
-	body := sdktranslator.TranslateRequest(from, to, baseModel, bytes.Clone(req.Payload), stream)
+	body := helps.TranslateRequestWithAPIKeyModelCompatibility(ctx, opts.Headers, e.cfg, from, to, baseModel, bytes.Clone(req.Payload), stream, helps.APIKeyModelIsCompat(req))
 	body = preserveXAIResponsesOutputControls(body, req.Payload, from)
 
 	var err error
-	body, err = thinking.ApplyThinking(body, req.Model, from.String(), e.Identifier(), e.Identifier())
+	body, err = helps.ApplyRequestThinking(body, req, opts, from.String(), e.Identifier(), e.Identifier())
 	if err != nil {
 		return nil, err
 	}
@@ -94,13 +94,14 @@ func (e *XAIExecutor) prepareResponsesRequestTo(ctx context.Context, req cliprox
 	clientDeclaredTools := collectXAIClientDeclaredToolKeys(body)
 	body = normalizeXAITools(body)
 	body = promoteXAIAdditionalTools(body)
-	// Drop choices that point at tools removed by normalizeXAITools before we
-	// inject native x_search, so a surviving allowed_tools / forced choice is not
-	// left pointing at a deleted tool once only x_search remains.
+	// Drop choices that point at tools removed by normalizeXAITools before any
+	// configured x_search injection, so no surviving choice references a deleted tool.
 	body = normalizeXAINamespaceToolChoice(body)
 	body = pruneXAIOrphanedToolChoice(body)
 	body = normalizeXAIToolChoiceForTools(body)
-	body = ensureXAINativeXSearchTool(body)
+	if e.cfg != nil && e.cfg.XAI.InjectXSearch {
+		body = ensureXAINativeXSearchTool(body)
+	}
 	var replayScope xaiReasoningReplayScope
 	body, replayScope, err = applyXAIReasoningReplayCacheRequired(ctx, from, req, opts, body)
 	if err != nil {
@@ -318,6 +319,8 @@ func applyXAIChatHeaders(r *http.Request, auth *cliproxyauth.Auth, token string,
 		r.Header.Set(xaiTokenAuthHeader, xaiTokenAuthValue)
 		r.Header.Set(xaiClientVersionHeader, xaiClientVersionValue)
 		r.Header.Set("User-Agent", "xai-grok-workspace/"+xaiClientVersionValue)
+		r.Header.Set(xaiClientIdentifierHeader, xaiClientIdentifierValue)
+		r.Header.Set(xaiAuthenticateResponseHeader, xaiAuthenticateResponseValue)
 	}
 	applyXAICustomHeaders(r, auth)
 }
@@ -542,9 +545,9 @@ func sanitizeXAIResponsesBody(body []byte, model string) []byte {
 // ensureXAINativeXSearchTool appends {"type":"x_search"} when the final tools
 // list does not already include native X Search. When tool_choice restricts the
 // model to allowed_tools, x_search is also added there (without duplicates) so
-// Grok can select the injected tool. HTTP and websocket executors both prepare
-// payloads through prepareResponsesRequestTo, so this runs once before the body
-// is submitted upstream.
+// Grok can select the injected tool. When injection is enabled, HTTP and websocket
+// executors both prepare payloads through prepareResponsesRequestTo, so this runs
+// once before the body is submitted upstream.
 func ensureXAINativeXSearchTool(body []byte) []byte {
 	if !gjson.ValidBytes(body) {
 		return body
