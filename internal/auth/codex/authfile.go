@@ -117,19 +117,34 @@ func LooksLikeCodexAuthFile(data []byte) bool {
 
 	// Already a flattened auth file: let the normal load path handle it. A codex
 	// type is served as-is; any other declared type belongs to another provider.
+	// Account-export documents are different: their top-level type describes the
+	// export container (for example, "sub2api-data"), not the provider. Defer the
+	// provider check until after unwrapping the first account below.
 	if declared, ok := root["type"].(string); ok && strings.TrimSpace(declared) != "" {
-		return false
+		if _, hasAccounts := root["accounts"]; !hasAccounts {
+			return false
+		}
 	}
 
 	candidate := root
+	var account map[string]any
 	if accounts, ok := root["accounts"].([]any); ok {
-		account, found := firstAuthFileObject(accounts)
+		var found bool
+		account, found = firstAuthFileObject(accounts)
 		if !found {
 			return false
 		}
 		candidate = account
 		if creds, okCreds := account["credentials"].(map[string]any); okCreds {
 			candidate = creds
+		}
+
+		// A provider marker on an account export must refer to OpenAI/Codex. This
+		// prevents unrelated multi-provider backup files from being rewritten merely
+		// because their credential object happens to contain a generic access_token.
+		platform := authFileString(account, []string{"platform"})
+		if platform != "" && !strings.EqualFold(platform, "openai") && !strings.EqualFold(platform, "codex") {
+			return false
 		}
 	}
 
@@ -274,6 +289,11 @@ func parseAuthFileAt(data []byte, now time.Time) (*AuthFileImport, error) {
 	storage.Email = authFileString(root,
 		[]string{"email"},
 		[]string{"tokens", "email"},
+	)
+	result.PlanType = authFileString(root,
+		[]string{"plan_type"},
+		[]string{"planType"},
+		[]string{"chatgpt_plan_type"},
 	)
 
 	if storage.AccessToken == "" {

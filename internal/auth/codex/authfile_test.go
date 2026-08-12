@@ -456,6 +456,8 @@ func TestLooksLikeCodexAuthFile(t *testing.T) {
 	}{
 		{name: "native tokens object", data: `{"auth_mode":"chatgpt","tokens":{"access_token":"x"}}`, want: true},
 		{name: "account export", data: string(accountExportJSON(t, accessToken, "rt", idToken, "acct", "e@x.com", "team")), want: true},
+		{name: "sub2api openai export", data: fmt.Sprintf(`{"type":"sub2api-data","accounts":[{"platform":"openai","credentials":{"access_token":%q,"chatgpt_account_id":"acct"}}]}`, accessToken), want: true},
+		{name: "sub2api other platform", data: `{"type":"sub2api-data","accounts":[{"platform":"gemini","credentials":{"access_token":"x","chatgpt_account_id":"acct"}}]}`, want: false},
 		{name: "access plus id token", data: `{"access_token":"a","id_token":"b"}`, want: true},
 		{name: "chatgpt account marker", data: `{"access_token":"a","chatgpt_account_id":"acct"}`, want: true},
 		{name: "api key only", data: `{"OPENAI_API_KEY":"sk"}`, want: true},
@@ -483,8 +485,10 @@ func TestNormalizeAuthFileJSON(t *testing.T) {
 
 	// Account-export shape carrying passthrough fields the parser does not model.
 	doc := map[string]any{
+		"type": "sub2api-data",
 		"accounts": []any{
 			map[string]any{
+				"platform":  "openai",
 				"plan_type": "team",
 				"credentials": map[string]any{
 					"access_token":       accessToken,
