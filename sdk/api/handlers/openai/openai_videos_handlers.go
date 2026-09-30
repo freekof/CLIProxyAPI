@@ -14,11 +14,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -369,10 +370,6 @@ func buildXAIVideosCreateRequest(rawJSON []byte, model string) ([]byte, xaiVideo
 	}
 	if imageURL != "" && len(referenceImages) > 0 {
 		return nil, xaiVideoCreateMetadata{}, fmt.Errorf("image and reference_images cannot be combined on xAI")
-	}
-	if len(referenceImages) > 0 && duration > 10 {
-		duration = 10
-		seconds = "10"
 	}
 
 	videoModel := canonicalXAIVideosModel(model)
@@ -891,7 +888,10 @@ func (h *OpenAIAPIHandler) VideosContent(c *gin.Context) {
 func (h *OpenAIAPIHandler) writeVideoContentFromURL(c *gin.Context, contentURL string) error {
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, contentURL, nil)
 	if err != nil {
-		errMsg := &interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: err}
+		errMsg := &interfaces.ErrorMessage{
+			StatusCode: clienterror.HTTPStatusFromErrorOr(err, http.StatusBadGateway),
+			Error:      err,
+		}
 		h.WriteErrorResponse(c, errMsg)
 		return err
 	}
@@ -899,7 +899,10 @@ func (h *OpenAIAPIHandler) writeVideoContentFromURL(c *gin.Context, contentURL s
 	httpClient := h.videoContentHTTPClient(c)
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		errMsg := &interfaces.ErrorMessage{StatusCode: http.StatusBadGateway, Error: err}
+		errMsg := &interfaces.ErrorMessage{
+			StatusCode: clienterror.HTTPStatusFromErrorOr(err, http.StatusBadGateway),
+			Error:      err,
+		}
 		h.WriteErrorResponse(c, errMsg)
 		return err
 	}

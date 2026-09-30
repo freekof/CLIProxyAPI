@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	homekv "github.com/router-for-me/CLIProxyAPI/v7/internal/home"
+	homekv "github.com/router-for-me/CLIProxyAPI/v8/internal/home"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -112,6 +112,7 @@ func purgeExpiredCaches() {
 	purgeExpiredXAIReasoningReplayCache(now)
 	purgeExpiredAntigravityReasoningReplayCache(now)
 	purgeExpiredKimiThinkingReplayCache(now)
+	purgeExpiredClaudeThinkingReplayCache(now)
 }
 
 // CacheSignature stores a thinking signature for a given model group and text.

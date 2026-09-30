@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// makeTestJWT builds an unsigned JWT whose payload carries the supplied claims.
+// makeCodexAuthJWT builds an unsigned JWT whose payload carries the supplied claims.
 // Only the payload segment is meaningful; ParseJWTToken does not verify
 // signatures, so the header and signature are placeholders.
-func makeTestJWT(t *testing.T, exp time.Time, email, accountID, planType string) string {
+func makeCodexAuthJWT(t *testing.T, exp time.Time, email, accountID, planType string) string {
 	t.Helper()
 
 	payload := map[string]any{
@@ -65,8 +65,8 @@ func codexAuthFileJSON(t *testing.T, authMode, accessToken, refreshToken, idToke
 func TestParseAuthFileValid(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	expiry := now.Add(2 * time.Hour)
-	accessToken := makeTestJWT(t, expiry, "user@example.com", "acct-123", "plus")
-	idToken := makeTestJWT(t, expiry, "user@example.com", "acct-123", "plus")
+	accessToken := makeCodexAuthJWT(t, expiry, "user@example.com", "acct-123", "plus")
+	idToken := makeCodexAuthJWT(t, expiry, "user@example.com", "acct-123", "plus")
 
 	data := codexAuthFileJSON(t, AuthModeChatGPT, accessToken, "refresh-abc", idToken, "acct-123", "2026-07-26T10:00:00Z")
 
@@ -113,7 +113,7 @@ func TestParseAuthFileValid(t *testing.T) {
 func TestParseAuthFileFlatLayout(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	expiry := now.Add(time.Hour)
-	accessToken := makeTestJWT(t, expiry, "flat@example.com", "acct-flat", "pro")
+	accessToken := makeCodexAuthJWT(t, expiry, "flat@example.com", "acct-flat", "pro")
 
 	// Legacy shape: OAuth material sits at the top level rather than under tokens.
 	data := []byte(fmt.Sprintf(`{"access_token":%q,"refresh_token":"r-flat","account_id":"acct-flat"}`, accessToken))
@@ -136,7 +136,7 @@ func TestParseAuthFileFlatLayout(t *testing.T) {
 func TestParseAuthFileExpiredToken(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	expiry := now.Add(-time.Hour)
-	accessToken := makeTestJWT(t, expiry, "user@example.com", "acct-123", "plus")
+	accessToken := makeCodexAuthJWT(t, expiry, "user@example.com", "acct-123", "plus")
 
 	data := codexAuthFileJSON(t, AuthModeChatGPT, accessToken, "refresh-abc", "", "acct-123", "")
 
@@ -150,7 +150,7 @@ func TestParseAuthFileWithinClockSkew(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	// Expired a minute ago, which is inside the tolerated skew window.
 	expiry := now.Add(-time.Minute)
-	accessToken := makeTestJWT(t, expiry, "user@example.com", "acct-123", "plus")
+	accessToken := makeCodexAuthJWT(t, expiry, "user@example.com", "acct-123", "plus")
 
 	data := codexAuthFileJSON(t, AuthModeChatGPT, accessToken, "refresh-abc", "", "acct-123", "")
 
@@ -162,7 +162,7 @@ func TestParseAuthFileWithinClockSkew(t *testing.T) {
 func TestParseAuthFileMissingRefreshTokenWarns(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	expiry := now.Add(3 * time.Hour)
-	accessToken := makeTestJWT(t, expiry, "user@example.com", "acct-123", "plus")
+	accessToken := makeCodexAuthJWT(t, expiry, "user@example.com", "acct-123", "plus")
 
 	data := codexAuthFileJSON(t, AuthModeChatGPT, accessToken, "", "", "acct-123", "")
 
@@ -217,7 +217,7 @@ func TestParseAuthFileMissingAccessToken(t *testing.T) {
 
 func TestParseAuthFileUnsupportedAuthMode(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	accessToken := makeTestJWT(t, now.Add(time.Hour), "user@example.com", "acct-123", "plus")
+	accessToken := makeCodexAuthJWT(t, now.Add(time.Hour), "user@example.com", "acct-123", "plus")
 
 	for _, mode := range []string{AuthModeAPIKey, "agentIdentity", "personal_access_token"} {
 		t.Run(mode, func(t *testing.T) {
@@ -232,7 +232,7 @@ func TestParseAuthFileUnsupportedAuthMode(t *testing.T) {
 
 func TestParseAuthFileAcceptsChatGPTModeCaseInsensitively(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	accessToken := makeTestJWT(t, now.Add(time.Hour), "user@example.com", "acct-123", "plus")
+	accessToken := makeCodexAuthJWT(t, now.Add(time.Hour), "user@example.com", "acct-123", "plus")
 
 	data := codexAuthFileJSON(t, "ChatGPT", accessToken, "refresh-abc", "", "acct-123", "")
 	if _, err := parseAuthFileAt(data, now); err != nil {
@@ -267,7 +267,7 @@ func TestParseAuthFileMalformed(t *testing.T) {
 func TestParseAuthFileExplicitExpiryWins(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	claimExpiry := now.Add(10 * time.Hour)
-	accessToken := makeTestJWT(t, claimExpiry, "user@example.com", "acct-123", "plus")
+	accessToken := makeCodexAuthJWT(t, claimExpiry, "user@example.com", "acct-123", "plus")
 
 	// The document states an earlier expiry than the token claims; the explicit
 	// field is authoritative so the refresh loop acts on the conservative value.
@@ -350,8 +350,8 @@ func accountExportJSON(t *testing.T, accessToken, refreshToken, idToken, account
 func TestParseAuthFileAccountExportLayout(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	expiry := now.Add(6 * time.Hour)
-	accessToken := makeTestJWT(t, expiry, "export@example.com", "acct-export", "team")
-	idToken := makeTestJWT(t, expiry, "export@example.com", "acct-export", "team")
+	accessToken := makeCodexAuthJWT(t, expiry, "export@example.com", "acct-export", "team")
+	idToken := makeCodexAuthJWT(t, expiry, "export@example.com", "acct-export", "team")
 
 	data := accountExportJSON(t, accessToken, "rt-export", idToken, "acct-export", "export@example.com", "team")
 
@@ -384,7 +384,7 @@ func TestParseAuthFileAccountExportZeroExpiryNotExpired(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
 	// Token is valid; only the file-level expires_at is the placeholder 0.
 	expiry := now.Add(time.Hour)
-	accessToken := makeTestJWT(t, expiry, "z@example.com", "acct-z", "plus")
+	accessToken := makeCodexAuthJWT(t, expiry, "z@example.com", "acct-z", "plus")
 
 	data := accountExportJSON(t, accessToken, "rt", "", "acct-z", "z@example.com", "plus")
 
@@ -421,7 +421,7 @@ func TestParseAuthFileEmptyAccounts(t *testing.T) {
 
 func TestParseAuthFileAccountExportUnsupportedMode(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	accessToken := makeTestJWT(t, now.Add(time.Hour), "e@x.com", "a", "plus")
+	accessToken := makeCodexAuthJWT(t, now.Add(time.Hour), "e@x.com", "a", "plus")
 
 	// auth_mode lives at the account level in this layout; it must still be honoured.
 	doc := map[string]any{
@@ -446,8 +446,8 @@ func TestParseAuthFileAccountExportUnsupportedMode(t *testing.T) {
 
 func TestLooksLikeCodexAuthFile(t *testing.T) {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
-	accessToken := makeTestJWT(t, now.Add(time.Hour), "e@x.com", "acct", "plus")
-	idToken := makeTestJWT(t, now.Add(time.Hour), "e@x.com", "acct", "plus")
+	accessToken := makeCodexAuthJWT(t, now.Add(time.Hour), "e@x.com", "acct", "plus")
+	idToken := makeCodexAuthJWT(t, now.Add(time.Hour), "e@x.com", "acct", "plus")
 
 	tests := []struct {
 		name string
@@ -480,8 +480,8 @@ func TestLooksLikeCodexAuthFile(t *testing.T) {
 func TestNormalizeAuthFileJSON(t *testing.T) {
 	now := time.Now()
 	expiry := now.Add(4 * time.Hour)
-	accessToken := makeTestJWT(t, expiry, "norm@example.com", "acct-norm", "team")
-	idToken := makeTestJWT(t, expiry, "norm@example.com", "acct-norm", "team")
+	accessToken := makeCodexAuthJWT(t, expiry, "norm@example.com", "acct-norm", "team")
+	idToken := makeCodexAuthJWT(t, expiry, "norm@example.com", "acct-norm", "team")
 
 	// Account-export shape carrying passthrough fields the parser does not model.
 	doc := map[string]any{
@@ -562,7 +562,7 @@ func TestNormalizeAuthFileJSON(t *testing.T) {
 
 func TestNormalizeAuthFileJSONRejectsExpired(t *testing.T) {
 	now := time.Now()
-	accessToken := makeTestJWT(t, now.Add(-2*time.Hour), "e@x.com", "acct", "plus")
+	accessToken := makeCodexAuthJWT(t, now.Add(-2*time.Hour), "e@x.com", "acct", "plus")
 	data := codexAuthFileJSON(t, AuthModeChatGPT, accessToken, "rt", "", "acct", "")
 
 	if _, _, err := NormalizeAuthFileJSON(data); !errors.Is(err, ErrAuthFileExpired) {

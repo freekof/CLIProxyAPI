@@ -9,11 +9,11 @@ import (
 	"sort"
 	"strings"
 
-	internalcache "github.com/router-for-me/CLIProxyAPI/v7/internal/cache"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	internalcache "github.com/router-for-me/CLIProxyAPI/v8/internal/cache"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -441,7 +441,10 @@ func (a *kimiThinkingReplayStreamAccumulator) content() ([]byte, bool) {
 	return content, true
 }
 
-func wrapKimiThinkingReplayStream(ctx context.Context, result *cliproxyexecutor.StreamResult, scope kimiThinkingReplayScope) *cliproxyexecutor.StreamResult {
+type thinkingReplayContentCacheFunc func(context.Context, kimiThinkingReplayScope, []byte)
+type thinkingReplayContentClearFunc func(context.Context, kimiThinkingReplayScope)
+
+func wrapThinkingReplayStream(ctx context.Context, result *cliproxyexecutor.StreamResult, scope kimiThinkingReplayScope, cacheContent thinkingReplayContentCacheFunc, clearContent thinkingReplayContentClearFunc) *cliproxyexecutor.StreamResult {
 	if result == nil || !scope.valid() {
 		return result
 	}
@@ -466,12 +469,16 @@ func wrapKimiThinkingReplayStream(ctx context.Context, result *cliproxyexecutor.
 			return
 		}
 		if content, completed := accumulator.content(); completed {
-			cacheKimiThinkingReplayContent(ctx, scope, content)
+			cacheContent(ctx, scope, content)
 			return
 		}
 		if accumulator.upstreamError && scope.replayApplied {
-			clearKimiThinkingReplayContent(ctx, scope)
+			clearContent(ctx, scope)
 		}
 	}()
 	return &cliproxyexecutor.StreamResult{Headers: result.Headers.Clone(), Chunks: out}
+}
+
+func wrapKimiThinkingReplayStream(ctx context.Context, result *cliproxyexecutor.StreamResult, scope kimiThinkingReplayScope) *cliproxyexecutor.StreamResult {
+	return wrapThinkingReplayStream(ctx, result, scope, cacheKimiThinkingReplayContent, clearKimiThinkingReplayContent)
 }

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
 // codexTestJWT builds an unsigned JWT carrying the ChatGPT plan claims the
@@ -67,7 +67,10 @@ func TestSynthesizeCodexAccountExport(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	auths := SynthesizeAuthFile(newSynthCtx(t.TempDir()), "/tmp/164.json", data)
+	auths, err := SynthesizeAuthFile(newSynthCtx(t.TempDir()), "/tmp/164.json", data)
+	if err != nil {
+		t.Fatalf("synthesize account-export file: %v", err)
+	}
 	if len(auths) == 0 {
 		t.Fatal("no auth synthesized from account-export file")
 	}
@@ -100,7 +103,10 @@ func TestSynthesizeNativeCodexUnchanged(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	auths := SynthesizeAuthFile(newSynthCtx(t.TempDir()), "/tmp/codex-user.json", data)
+	auths, err := SynthesizeAuthFile(newSynthCtx(t.TempDir()), "/tmp/codex-user.json", data)
+	if err != nil {
+		t.Fatalf("synthesize flat codex file: %v", err)
+	}
 	if len(auths) == 0 {
 		t.Fatal("no auth synthesized from flat codex file")
 	}
